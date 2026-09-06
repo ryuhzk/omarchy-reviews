@@ -21,7 +21,7 @@
     "defaults": {
       "panelWidth": 720,
       "pollIntervalSec": 10800,
-      "unrepliedOnly": true
+      "unrepliedOnly": false
     },
     "schema": [
       {
@@ -47,9 +47,9 @@
       {
         "key": "unrepliedOnly",
         "type": "boolean",
-        "label": "Show unreplied reviews first",
-        "defaultValue": true,
-        "description": "Default inbox filter after opening the panel."
+        "label": "Show unreplied reviews only",
+        "defaultValue": false,
+        "description": "When enabled, the inbox opens on unreplied reviews instead of all reviews."
       }
     ]
   }

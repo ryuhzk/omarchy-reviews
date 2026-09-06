@@ -11,10 +11,10 @@ BarWidget {
     ? bar.shell.serviceFor(moduleName) : null
   readonly property int panelWidth: boundedInt(setting("panelWidth", 720), 420, 1100)
   readonly property int pollIntervalSec: boundedInt(setting("pollIntervalSec", 10800), 3600, 43200)
-  readonly property bool unrepliedOnly: setting("unrepliedOnly", true) === true
+  readonly property bool unrepliedOnly: setting("unrepliedOnly", false) === true
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   readonly property int unrepliedCount: reviewsService ? Number(reviewsService.unrepliedCount || 0) : 0
-  readonly property string barLabel: unrepliedCount > 0 ? ("Reviews " + unrepliedCount) : "Reviews"
+  readonly property string barCount: unrepliedCount > 0 ? String(unrepliedCount) : ""
 
   Binding { target: root.reviewsService; property: "pollIntervalSec"; value: root.pollIntervalSec; when: root.reviewsService !== null }
 
@@ -76,7 +76,7 @@ BarWidget {
 
     Text {
       anchors.verticalCenter: parent.verticalCenter
-      text: "󰓀"
+      text: "󰓎"
       color: root.bar ? root.bar.barForeground : Color.foreground
       font.family: root.bar ? root.bar.fontFamily : Style.font.family
       font.pixelSize: Style.font.body
@@ -84,7 +84,8 @@ BarWidget {
 
     Text {
       anchors.verticalCenter: parent.verticalCenter
-      text: root.barLabel
+      visible: root.barCount !== ""
+      text: root.barCount
       color: root.bar ? root.bar.barForeground : Color.foreground
       font.family: root.bar ? root.bar.fontFamily : Style.font.family
       font.pixelSize: Style.font.body

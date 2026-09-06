@@ -17,7 +17,7 @@ Panel {
   property var hostWidget: null
   property var reviewsService: null
   property int panelWidth: 720
-  property bool unrepliedOnly: true
+  property bool unrepliedOnly: false
   property string view: "setup"
   property string statusText: "Ready"
   property string lastError: ""
@@ -36,6 +36,9 @@ Panel {
   property string nextPage: ""
   property var selectedReview: null
   property string replyDraft: ""
+  property string pendingReviewId: ""
+  property string pendingReplyBody: ""
+  property string sentReviewId: ""
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -45,9 +48,16 @@ Panel {
     String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, ""))
   readonly property string backendPath: pluginDir + "/backend/customer-reviews.ts"
   readonly property bool busy: cliProcess.running
-  readonly property var visibleReviews: unrepliedOnly
-    ? reviews.filter(function(item) { return item && item.response === null })
-    : reviews
+  readonly property var visibleReviews: {
+    var list = []
+    for (var index = 0; index < reviews.length; index += 1) {
+      var item = reviews[index]
+      if (!item) continue
+      var selected = selectedReview && selectedReview.id === item.id
+      if (!unrepliedOnly || item.response === null || selected) list.push(item)
+    }
+    return list
+  }
 
   function parseEnvelope(raw) {
     try {
@@ -147,7 +157,7 @@ Panel {
     }
     view = "inbox"
     if (activeAppId === "") activeAppId = watchedAppIds[0]
-    runCli("reviews-list", ["reviews", "list", "--app", activeAppId].concat(unrepliedOnly ? ["--unreplied"] : []))
+    runCli("reviews-list", ["reviews", "list", "--app", activeAppId])
   }
 
   function saveCredentials() {
@@ -179,22 +189,75 @@ Panel {
     runCli("watch", ["watch", "--ids", watchedAppIds.join(",")])
   }
 
+  function copyReview(review, response) {
+    return {
+      id: review.id,
+      rating: review.rating,
+      title: review.title,
+      body: review.body,
+      nickname: review.nickname,
+      createdDate: review.createdDate,
+      territory: review.territory,
+      response: response
+    }
+  }
+
+  function patchReview(reviewId, response) {
+    var next = []
+    var patched = null
+    for (var index = 0; index < reviews.length; index += 1) {
+      var item = reviews[index]
+      if (item && item.id === reviewId) {
+        patched = copyReview(item, response)
+        next.push(patched)
+      } else {
+        next.push(item)
+      }
+    }
+    reviews = next
+    if (selectedReview && selectedReview.id === reviewId) selectedReview = patched
+    return patched
+  }
+
+  function refreshBadge() {
+    if (reviewsService && typeof reviewsService.refresh === "function") reviewsService.refresh()
+  }
+
   function selectApp(appId) {
     if (appId === "" || busy) return
     activeAppId = appId
     selectedReview = null
     replyDraft = ""
-    runCli("reviews-list", ["reviews", "list", "--app", appId].concat(unrepliedOnly ? ["--unreplied"] : []))
+    pendingReviewId = ""
+    pendingReplyBody = ""
+    sentReviewId = ""
+    runCli("reviews-list", ["reviews", "list", "--app", appId])
   }
 
   function toggleReview(review) {
     if (!review) return
     if (selectedReview && selectedReview.id === review.id) {
       selectedReview = null
+      sentReviewId = ""
+      statusText = String(visibleReviews.length) + " reviews"
       return
     }
     selectedReview = review
-    replyDraft = ""
+    if (sentReviewId !== review.id) sentReviewId = ""
+    if (!review.response) replyDraft = ""
+  }
+
+  function revealItem(item) {
+    if (!item || !panelFlick) return
+    var top = item.mapToItem(panelFlick.contentItem, 0, 0).y
+    var bottom = top + item.height
+    var viewTop = panelFlick.contentY
+    var viewBottom = viewTop + panelFlick.height
+    var maxY = Math.max(0, panelFlick.contentHeight - panelFlick.height)
+    if (bottom > viewBottom)
+      panelFlick.contentY = Math.min(maxY, bottom - panelFlick.height + Style.space(16))
+    else if (top < viewTop)
+      panelFlick.contentY = Math.max(0, top - Style.space(12))
   }
 
   function loadMore() {
@@ -210,6 +273,8 @@ Panel {
       return
     }
     lastError = ""
+    pendingReviewId = String(selectedReview.id || "")
+    pendingReplyBody = body
     runCli("reply", ["reviews", "reply", "--review", selectedReview.id, "--body", body])
   }
 
@@ -259,10 +324,30 @@ Panel {
       statusText = String(visibleReviews.length) + " reviews"
       return
     }
-    if (kind === "reply" || kind === "delete-reply") {
-      statusText = kind === "reply" ? "Reply sent" : "Reply deleted"
-      selectApp(activeAppId)
-      if (reviewsService && typeof reviewsService.refresh === "function") reviewsService.refresh()
+    if (kind === "reply") {
+      var reviewId = String(data.reviewId || pendingReviewId)
+      var response = {
+        id: String(data.responseId || ""),
+        body: pendingReplyBody,
+        lastModifiedDate: new Date().toISOString(),
+        state: "PUBLISHED"
+      }
+      var patched = patchReview(reviewId, response)
+      sentReviewId = reviewId
+      replyDraft = ""
+      pendingReviewId = ""
+      pendingReplyBody = ""
+      statusText = "Replied to " + reviewerName(patched || selectedReview)
+      refreshBadge()
+      return
+    }
+    if (kind === "delete-reply") {
+      var deleted = selectedReview
+      patchReview(deleted ? deleted.id : "", null)
+      sentReviewId = ""
+      replyDraft = ""
+      statusText = "Reply to " + reviewerName(deleted) + " deleted"
+      refreshBadge()
     }
   }
 
@@ -298,7 +383,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(root.panelWidth))
-    contentHeight: panel.fittedContentHeight(Style.space(760), Style.space(840))
+    contentHeight: panel.fittedContentHeight(Style.space(780), Style.space(960))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -307,6 +392,7 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
 
       Flickable {
+        id: panelFlick
         anchors.fill: parent
         contentWidth: width
         contentHeight: content.implicitHeight
@@ -525,12 +611,17 @@ Panel {
               spacing: Style.space(8)
 
               Button {
-                text: root.unrepliedOnly ? "Unreplied" : "All reviews"
+                text: "All reviews"
                 bordered: true
-                onClicked: {
-                  root.unrepliedOnly = !root.unrepliedOnly
-                  root.selectApp(root.activeAppId)
-                }
+                selected: !root.unrepliedOnly
+                onClicked: root.unrepliedOnly = false
+              }
+
+              Button {
+                text: "Unreplied"
+                bordered: true
+                selected: root.unrepliedOnly
+                onClicked: root.unrepliedOnly = true
               }
 
               Button {
@@ -568,23 +659,22 @@ Panel {
               font.pixelSize: Style.font.caption
             }
 
-            ListView {
+            Column {
               id: reviewList
               width: parent.width
-              height: Style.space(520)
-              clip: true
               spacing: Style.space(8)
-              boundsBehavior: Flickable.StopAtBounds
-              model: root.visibleReviews
 
-              delegate: Rectangle {
+              Repeater {
+                model: root.visibleReviews
+
+                Rectangle {
                 id: reviewCard
                 required property var modelData
                 required property int index
                 readonly property bool expanded: !!(root.selectedReview && root.selectedReview.id === modelData.id)
                 readonly property bool hasReply: !!(modelData.response)
 
-                width: ListView.view.width
+                width: reviewList.width
                 height: cardColumn.implicitHeight + Style.space(20)
                 radius: Style.space(10)
                 color: expanded
@@ -602,6 +692,16 @@ Panel {
                 Behavior on opacity {
                   NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
                 }
+
+                Timer {
+                  id: expandAnimTimer
+                  interval: 240
+                  repeat: false
+                  onTriggered: if (reviewCard.expanded) root.revealItem(reviewCard)
+                }
+
+                onExpandedChanged: expandAnimTimer.restart()
+                onHeightChanged: if (expanded && !expandAnimTimer.running) root.revealItem(reviewCard)
 
                 Column {
                   id: cardColumn
@@ -636,7 +736,7 @@ Panel {
 
                         Rectangle {
                           id: replyingBadge
-                          visible: reviewCard.expanded && !reviewCard.hasReply
+                          visible: reviewCard.expanded && (!reviewCard.hasReply || root.sentReviewId === String(modelData.id))
                           anchors.verticalCenter: parent.verticalCenter
                           width: badgeText.implicitWidth + Style.space(12)
                           height: badgeText.implicitHeight + Style.space(4)
@@ -648,7 +748,7 @@ Panel {
                           Text {
                             id: badgeText
                             anchors.centerIn: parent
-                            text: "Replying"
+                            text: reviewCard.hasReply ? "Sent" : "Replying"
                             color: Color.accent
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.caption
@@ -675,14 +775,12 @@ Panel {
                         var reviewId = String(reviewCard.modelData.id || "")
                         root.toggleReview(reviewCard.modelData)
                         if (root.selectedReview && String(root.selectedReview.id) === reviewId)
-                          Qt.callLater(function() {
-                            reviewList.positionViewAtIndex(reviewCard.index, ListView.Contain)
-                          })
+                          Qt.callLater(function() { root.revealItem(reviewCard) })
                       }
                     }
                   }
 
-                  Item {
+                    Item {
                     id: expandWrap
                     width: parent.width
                     height: reviewCard.expanded ? expandColumn.implicitHeight : 0
@@ -690,6 +788,7 @@ Panel {
                     opacity: reviewCard.expanded ? 1 : 0
 
                     Behavior on height {
+                      enabled: expandAnimTimer.running || !reviewCard.expanded
                       NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
                     }
 
@@ -815,30 +914,52 @@ Panel {
                       Loader {
                         id: composerLoader
                         width: parent.width
-                        height: reviewCard.hasReply ? 0 : Style.space(160)
+                        height: reviewCard.hasReply ? 0 : (item ? item.boxHeight : Style.space(160))
                         active: !reviewCard.hasReply && (reviewCard.expanded || expandWrap.height > 8)
 
                         sourceComponent: Component {
-                          BorderSurface {
-                            color: Style.controlFill(inlineReply.activeFocus, inlineReply.hovered, root.foreground, Color.accent)
-                            borderSpec: Border.controlSpec(inlineReply.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
-                            radius: Style.cornerRadius
+                          Item {
+                            id: composerRoot
+                            readonly property int boxMin: Style.space(160)
+                            readonly property int boxMax: Style.space(380)
+                            readonly property int boxHeight: Math.min(boxMax, Math.max(boxMin, inlineReply.contentHeight + Style.space(28)))
+                            implicitHeight: boxHeight
+                            height: boxHeight
+                            width: parent.width
 
-                            TextArea {
-                              id: inlineReply
+                            BorderSurface {
                               anchors.fill: parent
-                              anchors.margins: Style.space(10)
-                              text: root.replyDraft
-                              placeholderText: "Public reply to " + root.reviewerName(reviewCard.modelData)
-                              wrapMode: TextEdit.Wrap
-                              selectByMouse: true
-                              color: root.foreground
-                              selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
-                              selectedTextColor: root.foreground
-                              font.family: root.fontFamily
-                              font.pixelSize: Style.font.body
-                              background: null
-                              onTextChanged: if (reviewCard.expanded) root.replyDraft = text
+                              color: Style.controlFill(inlineReply.activeFocus, inlineReply.hovered, root.foreground, Color.accent)
+                              borderSpec: Border.controlSpec(inlineReply.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
+                              radius: Style.cornerRadius
+
+                              ScrollView {
+                                id: replyScroll
+                                anchors.fill: parent
+                                anchors.margins: Style.space(8)
+                                clip: true
+                                contentWidth: availableWidth
+                                ScrollBar.vertical.policy: composerRoot.boxHeight >= composerRoot.boxMax
+                                  ? ScrollBar.AlwaysOn
+                                  : ScrollBar.AsNeeded
+
+                                TextArea {
+                                  id: inlineReply
+                                  width: replyScroll.availableWidth
+                                  text: root.replyDraft
+                                  placeholderText: "Public reply to " + root.reviewerName(reviewCard.modelData)
+                                  placeholderTextColor: root.dim
+                                  wrapMode: TextEdit.Wrap
+                                  selectByMouse: true
+                                  color: root.foreground
+                                  selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+                                  selectedTextColor: root.foreground
+                                  font.family: root.fontFamily
+                                  font.pixelSize: Style.font.body
+                                  background: null
+                                  onTextChanged: if (reviewCard.expanded) root.replyDraft = text
+                                }
+                              }
                             }
                           }
                         }
@@ -874,6 +995,7 @@ Panel {
                       }
                     }
                   }
+                }
                 }
               }
             }

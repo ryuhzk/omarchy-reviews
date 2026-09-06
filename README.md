@@ -79,7 +79,7 @@ directory only if you also want to discard the API key and watch list.
 | ------------------ | ------: | ---------------------------------------------------- |
 | `panelWidth`       |   `720` | Popup width                                          |
 | `pollIntervalSec`  | `10800` | Background poll interval (1–12 hours, default 3)     |
-| `unrepliedOnly`    |  `true` | Inbox opens on unreplied reviews                     |
+| `unrepliedOnly`    | `false` | Inbox opens on all reviews; Unreplied is a filter    |
 
 Opening the panel always loads once. The 3-hour poll only updates the
 badge and notifications.
