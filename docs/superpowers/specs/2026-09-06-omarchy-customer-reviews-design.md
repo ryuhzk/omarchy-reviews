@@ -370,16 +370,14 @@ Automated tests (no live Apple calls):
 
 ## Install (after implementation)
 
-Local development, same as lyrics:
+Follow the official Omarchy plugin commands from
+https://plugins.omarchy.org/develop.html — no symlinks inside the plugin
+folder:
 
-```bash
-ln -s "$PWD" ~/.config/omarchy/plugins/ryuhzk.customer-reviews
-omarchy-shell shell rescanPlugins
-omarchy plugin enable ryuhzk.customer-reviews --after omarchy.clock
+```sh
+omarchy plugin add file://$HOME/Work/omarchy-reviews --enable
+omarchy plugin remove ryuhzk.customer-reviews
 ```
-
-README also documents
-`omarchy plugin add file://$HOME/Work/omarchy-customer-reviews --enable --yes`.
 
 ## Implementation order
 

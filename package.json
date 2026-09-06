@@ -1,0 +1,12 @@
+{
+  "name": "omarchy-customer-reviews",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "reviews": "bun run backend/customer-reviews.ts",
+    "test": "bun test",
+    "check": "bun test && bun build backend/customer-reviews.ts --target=bun --outdir=/tmp/omarchy-customer-reviews-build"
+  },
+  "packageManager": "bun@1.4.2"
+}
