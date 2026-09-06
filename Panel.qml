@@ -36,7 +36,6 @@ Panel {
   property string nextPage: ""
   property var selectedReview: null
   property string replyDraft: ""
-  property int replyPaneWidth: 340
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -76,6 +75,19 @@ Panel {
     var date = new Date(String(iso || ""))
     if (isNaN(date.getTime())) return ""
     return date.toLocaleDateString(Qt.locale(), "yyyy-MM-dd")
+  }
+
+  function reviewerName(review) {
+    var name = String((review && review.nickname) || "").trim()
+    return name !== "" ? name : "Customer"
+  }
+
+  function appNameFor(appId) {
+    var id = String(appId || "")
+    for (var index = 0; index < apps.length; index += 1) {
+      if (String(apps[index].id) === id) return String(apps[index].name || id)
+    }
+    return id
   }
 
   function runCli(kind, args) {
@@ -172,8 +184,17 @@ Panel {
     activeAppId = appId
     selectedReview = null
     replyDraft = ""
-    replyArea.text = ""
     runCli("reviews-list", ["reviews", "list", "--app", appId].concat(unrepliedOnly ? ["--unreplied"] : []))
+  }
+
+  function toggleReview(review) {
+    if (!review) return
+    if (selectedReview && selectedReview.id === review.id) {
+      selectedReview = null
+      return
+    }
+    selectedReview = review
+    replyDraft = ""
   }
 
   function loadMore() {
@@ -183,7 +204,7 @@ Panel {
 
   function submitReply() {
     if (!selectedReview || busy) return
-    var body = replyArea.text
+    var body = replyDraft
     if (String(body || "").trim() === "") {
       lastError = "Reply text is required"
       return
@@ -229,12 +250,11 @@ Panel {
       reviews = kind === "reviews-next" ? reviews.concat(incoming) : incoming
       nextPage = String(data.next || "")
       if (selectedReview) {
+        var matched = null
         for (var index = 0; index < reviews.length; index += 1) {
-          if (reviews[index].id === selectedReview.id) selectedReview = reviews[index]
+          if (reviews[index].id === selectedReview.id) matched = reviews[index]
         }
-      } else if (visibleReviews.length > 0) {
-        selectedReview = visibleReviews[0]
-        replyArea.text = ""
+        selectedReview = matched
       }
       statusText = String(visibleReviews.length) + " reviews"
       return
@@ -278,7 +298,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(root.panelWidth))
-    contentHeight: panel.fittedContentHeight(Style.space(820), Style.space(900))
+    contentHeight: panel.fittedContentHeight(Style.space(760), Style.space(840))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -530,70 +550,118 @@ Panel {
               }
             }
 
-            Item {
-              id: inboxBody
+            Text {
+              visible: !root.busy && root.visibleReviews.length === 0
               width: parent.width
-              height: Style.space(500)
+              text: root.unrepliedOnly ? "No unreplied reviews" : "No reviews yet"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
 
-              readonly property int handleWidth: Style.space(10)
-              readonly property int minLeftWidth: Style.space(260)
-              readonly property int minReplyWidth: Style.space(240)
+            Text {
+              visible: root.visibleReviews.length > 0 && root.selectedReview === null
+              width: parent.width
+              text: "Click a review to reply"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
 
-              function clampReplyWidth(value) {
-                var maxReply = Math.max(inboxBody.minReplyWidth, inboxBody.width - inboxBody.minLeftWidth - inboxBody.handleWidth)
-                return Math.max(inboxBody.minReplyWidth, Math.min(maxReply, value))
-              }
+            ListView {
+              id: reviewList
+              width: parent.width
+              height: Style.space(520)
+              clip: true
+              spacing: Style.space(8)
+              boundsBehavior: Flickable.StopAtBounds
+              model: root.visibleReviews
 
-              onWidthChanged: root.replyPaneWidth = clampReplyWidth(root.replyPaneWidth)
+              delegate: Rectangle {
+                id: reviewCard
+                required property var modelData
+                required property int index
+                readonly property bool expanded: !!(root.selectedReview && root.selectedReview.id === modelData.id)
+                readonly property bool hasReply: !!(modelData.response)
 
-              Item {
-                id: leftPane
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: splitHandle.left
-                anchors.rightMargin: Style.space(4)
+                width: ListView.view.width
+                height: cardColumn.implicitHeight + Style.space(20)
+                radius: Style.space(10)
+                color: expanded
+                  ? Style.selectedFillFor(root.foreground, Color.accent)
+                  : Util.alpha(root.foreground, 0.05)
+                opacity: (!root.selectedReview || expanded) ? 1 : 0.42
+                border.width: expanded ? 1 : 0
+                border.color: Color.accent
+                clip: true
 
-                ListView {
-                  id: reviewList
+                Behavior on color {
+                  ColorAnimation { duration: 140 }
+                }
+
+                Behavior on opacity {
+                  NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+                }
+
+                Column {
+                  id: cardColumn
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  height: Math.round(parent.height * 0.38)
-                  clip: true
-                  model: root.visibleReviews
-                  spacing: Style.space(6)
-                  boundsBehavior: Flickable.StopAtBounds
+                  anchors.margins: Style.space(12)
+                  spacing: Style.space(8)
 
-                  delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width
-                    height: reviewSummary.implicitHeight + Style.space(14)
-                    radius: Style.space(8)
-                    color: root.selectedReview && root.selectedReview.id === modelData.id
-                      ? Style.selectedFillFor(root.foreground, Color.accent)
-                      : Util.alpha(root.foreground, 0.05)
+                  Item {
+                    width: parent.width
+                    height: headerColumn.implicitHeight
 
                     Column {
-                      id: reviewSummary
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      anchors.margins: Style.space(10)
+                      id: headerColumn
+                      width: parent.width
                       spacing: Style.space(3)
 
-                      Text {
+                      Row {
                         width: parent.width
-                        text: root.stars(modelData.rating) + "  " + String(modelData.title || "Untitled")
-                        color: root.foreground
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        font.bold: true
-                        elide: Text.ElideRight
+                        spacing: Style.space(8)
+
+                        Text {
+                          width: parent.width - (replyingBadge.visible ? replyingBadge.width + Style.space(8) : 0)
+                          text: root.stars(modelData.rating) + "  " + String(modelData.title || "Untitled")
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                          elide: Text.ElideRight
+                        }
+
+                        Rectangle {
+                          id: replyingBadge
+                          visible: reviewCard.expanded && !reviewCard.hasReply
+                          anchors.verticalCenter: parent.verticalCenter
+                          width: badgeText.implicitWidth + Style.space(12)
+                          height: badgeText.implicitHeight + Style.space(4)
+                          radius: height / 2
+                          color: Util.alpha(Color.accent, 0.22)
+                          border.width: 1
+                          border.color: Color.accent
+
+                          Text {
+                            id: badgeText
+                            anchors.centerIn: parent
+                            text: "Replying"
+                            color: Color.accent
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                          }
+                        }
                       }
 
                       Text {
-                        text: String(modelData.nickname || "Customer") + " · " + root.shortDate(modelData.createdDate)
+                        width: parent.width
+                        text: [modelData.nickname, modelData.territory, root.shortDate(modelData.createdDate)].filter(function(value) {
+                          return String(value || "") !== ""
+                        }).join(" · ")
                         color: root.dim
                         font.family: root.fontFamily
                         font.pixelSize: Style.font.caption
@@ -604,212 +672,218 @@ Panel {
                       anchors.fill: parent
                       cursorShape: Qt.PointingHandCursor
                       onClicked: {
-                        root.selectedReview = modelData
-                        replyArea.text = ""
+                        var reviewId = String(reviewCard.modelData.id || "")
+                        root.toggleReview(reviewCard.modelData)
+                        if (root.selectedReview && String(root.selectedReview.id) === reviewId)
+                          Qt.callLater(function() {
+                            reviewList.positionViewAtIndex(reviewCard.index, ListView.Contain)
+                          })
+                      }
+                    }
+                  }
+
+                  Item {
+                    id: expandWrap
+                    width: parent.width
+                    height: reviewCard.expanded ? expandColumn.implicitHeight : 0
+                    clip: true
+                    opacity: reviewCard.expanded ? 1 : 0
+
+                    Behavior on height {
+                      NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                    }
+
+                    Behavior on opacity {
+                      NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
+                    }
+
+                    Column {
+                      id: expandColumn
+                      width: parent.width
+                      spacing: Style.space(10)
+                      opacity: expandWrap.opacity
+                      y: reviewCard.expanded ? 0 : Style.space(-6)
+
+                      Behavior on y {
+                        NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
+                      }
+
+                      Rectangle {
+                        width: parent.width
+                        height: quoteColumn.implicitHeight + Style.space(16)
+                        radius: Style.space(8)
+                        color: Util.alpha(root.foreground, 0.06)
+
+                        Rectangle {
+                          width: Style.space(3)
+                          anchors.left: parent.left
+                          anchors.top: parent.top
+                          anchors.bottom: parent.bottom
+                          anchors.margins: Style.space(8)
+                          radius: width / 2
+                          color: Color.accent
+                        }
+
+                        Column {
+                          id: quoteColumn
+                          anchors.left: parent.left
+                          anchors.right: parent.right
+                          anchors.verticalCenter: parent.verticalCenter
+                          anchors.leftMargin: Style.space(18)
+                          anchors.rightMargin: Style.space(10)
+                          spacing: Style.space(4)
+
+                          Text {
+                            width: parent.width
+                            text: String(modelData.body || "")
+                            color: root.foreground
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.body
+                            wrapMode: Text.WordWrap
+                          }
+                        }
+                      }
+
+                      Rectangle {
+                        visible: !reviewCard.hasReply
+                        width: parent.width
+                        height: targetColumn.implicitHeight + Style.space(16)
+                        radius: Style.space(8)
+                        color: Util.alpha(Color.accent, 0.16)
+                        border.width: 1
+                        border.color: Color.accent
+
+                        Column {
+                          id: targetColumn
+                          anchors.left: parent.left
+                          anchors.right: parent.right
+                          anchors.verticalCenter: parent.verticalCenter
+                          anchors.margins: Style.space(10)
+                          spacing: Style.space(2)
+
+                          Text {
+                            text: "Replying to"
+                            color: Color.accent
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                          }
+
+                          Text {
+                            width: parent.width
+                            text: root.reviewerName(modelData)
+                            color: root.foreground
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.subtitle
+                            font.bold: true
+                            elide: Text.ElideRight
+                          }
+
+                          Text {
+                            width: parent.width
+                            text: [root.stars(modelData.rating), String(modelData.title || "Untitled"), root.appNameFor(root.activeAppId)].filter(function(value) {
+                              return String(value || "") !== ""
+                            }).join(" · ")
+                            color: root.dim
+                            font.family: root.fontFamily
+                            font.pixelSize: Style.font.caption
+                            elide: Text.ElideRight
+                          }
+                        }
+                      }
+
+                      Text {
+                        width: parent.width
+                        visible: reviewCard.hasReply
+                        text: "Your reply to " + root.reviewerName(modelData)
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Text {
+                        width: parent.width
+                        visible: reviewCard.hasReply
+                        text: reviewCard.hasReply ? String(modelData.response.body || "") : ""
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        wrapMode: Text.WordWrap
+                      }
+
+                      Loader {
+                        id: composerLoader
+                        width: parent.width
+                        height: reviewCard.hasReply ? 0 : Style.space(160)
+                        active: !reviewCard.hasReply && (reviewCard.expanded || expandWrap.height > 8)
+
+                        sourceComponent: Component {
+                          BorderSurface {
+                            color: Style.controlFill(inlineReply.activeFocus, inlineReply.hovered, root.foreground, Color.accent)
+                            borderSpec: Border.controlSpec(inlineReply.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
+                            radius: Style.cornerRadius
+
+                            TextArea {
+                              id: inlineReply
+                              anchors.fill: parent
+                              anchors.margins: Style.space(10)
+                              text: root.replyDraft
+                              placeholderText: "Public reply to " + root.reviewerName(reviewCard.modelData)
+                              wrapMode: TextEdit.Wrap
+                              selectByMouse: true
+                              color: root.foreground
+                              selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
+                              selectedTextColor: root.foreground
+                              font.family: root.fontFamily
+                              font.pixelSize: Style.font.body
+                              background: null
+                              onTextChanged: if (reviewCard.expanded) root.replyDraft = text
+                            }
+                          }
+                        }
+                      }
+
+                      Row {
+                        spacing: Style.space(8)
+
+                        Button {
+                          visible: !reviewCard.hasReply
+                          text: root.busy ? "Sending…" : "Reply to " + root.reviewerName(modelData)
+                          bordered: true
+                          enabled: !root.busy
+                          onClicked: root.submitReply()
+                        }
+
+                        Button {
+                          visible: reviewCard.hasReply
+                          text: "Delete reply"
+                          bordered: true
+                          enabled: !root.busy
+                          onClicked: root.removeReply()
+                        }
+
+                        Text {
+                          anchors.verticalCenter: parent.verticalCenter
+                          visible: !reviewCard.hasReply
+                          text: String(root.replyDraft.length) + " / 4000"
+                          color: root.replyDraft.length > 4000 ? root.urgent : root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                        }
                       }
                     }
                   }
                 }
-
-                Flickable {
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.top: reviewList.bottom
-                  anchors.topMargin: Style.space(10)
-                  anchors.bottom: parent.bottom
-                  clip: true
-                  contentWidth: width
-                  contentHeight: reviewDetail.implicitHeight
-                  boundsBehavior: Flickable.StopAtBounds
-                  flickableDirection: Flickable.VerticalFlick
-                  interactive: contentHeight > height
-
-                  Column {
-                    id: reviewDetail
-                    width: parent.width
-                    spacing: Style.space(8)
-
-                    Text {
-                      width: parent.width
-                      visible: root.selectedReview !== null
-                      text: root.selectedReview
-                        ? root.stars(root.selectedReview.rating) + "  " + String(root.selectedReview.title || "Untitled")
-                        : "Select a review"
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.subtitle
-                      font.bold: true
-                      wrapMode: Text.WordWrap
-                    }
-
-                    Text {
-                      width: parent.width
-                      visible: root.selectedReview !== null
-                      text: root.selectedReview
-                        ? [root.selectedReview.nickname, root.selectedReview.territory, root.shortDate(root.selectedReview.createdDate)].filter(function(value) {
-                            return String(value || "") !== ""
-                          }).join(" · ")
-                        : ""
-                      color: root.dim
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-
-                    Text {
-                      width: parent.width
-                      visible: root.selectedReview !== null
-                      text: root.selectedReview ? String(root.selectedReview.body || "") : ""
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      wrapMode: Text.WordWrap
-                    }
-                  }
-                }
               }
+            }
 
-              Rectangle {
-                id: splitHandle
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: replyPane.left
-                width: inboxBody.handleWidth
-                radius: width / 2
-                color: splitDrag.containsMouse || splitDrag.pressed
-                  ? Color.accent
-                  : Util.alpha(root.foreground, 0.22)
-
-                MouseArea {
-                  id: splitDrag
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.SizeHorCursor
-                  property int pressWidth: 0
-                  property real pressX: 0
-
-                  onPressed: function(mouse) {
-                    pressWidth = root.replyPaneWidth
-                    pressX = mapToItem(inboxBody, mouse.x, 0).x
-                  }
-
-                  onPositionChanged: function(mouse) {
-                    if (!pressed) return
-                    var nowX = mapToItem(inboxBody, mouse.x, 0).x
-                    root.replyPaneWidth = inboxBody.clampReplyWidth(pressWidth + (pressX - nowX))
-                  }
-                }
-              }
-
-              Item {
-                id: replyPane
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                anchors.right: parent.right
-                width: inboxBody.clampReplyWidth(root.replyPaneWidth)
-
-                Text {
-                  id: replyLabel
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.top: parent.top
-                  text: root.selectedReview && root.selectedReview.response ? "Your reply" : "Reply"
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-
-                BorderSurface {
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.top: replyLabel.bottom
-                  anchors.topMargin: Style.space(6)
-                  anchors.bottom: replyActions.top
-                  anchors.bottomMargin: Style.space(8)
-                  color: Style.controlFill(replyArea.activeFocus, replyArea.hovered, root.foreground, Color.accent)
-                  borderSpec: Border.controlSpec(replyArea.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
-                  radius: Style.cornerRadius
-
-                  TextArea {
-                    id: replyArea
-                    anchors.fill: parent
-                    anchors.margins: Style.space(10)
-                    visible: root.selectedReview !== null && (!root.selectedReview.response)
-                    placeholderText: "Write a public reply"
-                    wrapMode: TextEdit.Wrap
-                    selectByMouse: true
-                    color: root.foreground
-                    selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
-                    selectedTextColor: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    background: null
-                  }
-
-                  Flickable {
-                    anchors.fill: parent
-                    anchors.margins: Style.space(10)
-                    visible: root.selectedReview && root.selectedReview.response
-                    clip: true
-                    contentWidth: width
-                    contentHeight: publishedReply.implicitHeight
-                    boundsBehavior: Flickable.StopAtBounds
-
-                    Text {
-                      id: publishedReply
-                      width: parent.width
-                      text: root.selectedReview && root.selectedReview.response
-                        ? String(root.selectedReview.response.body || "")
-                        : ""
-                      color: root.foreground
-                      font.family: root.fontFamily
-                      font.pixelSize: Style.font.body
-                      wrapMode: Text.WordWrap
-                    }
-                  }
-                }
-
-                Row {
-                  id: replyActions
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.bottom: parent.bottom
-                  spacing: Style.space(8)
-
-                  Button {
-                    visible: root.selectedReview !== null && (!root.selectedReview.response)
-                    text: root.busy ? "Sending…" : "Submit reply"
-                    bordered: true
-                    enabled: !root.busy
-                    onClicked: root.submitReply()
-                  }
-
-                  Button {
-                    visible: root.selectedReview && root.selectedReview.response
-                    text: "Delete reply"
-                    bordered: true
-                    enabled: !root.busy
-                    onClicked: root.removeReply()
-                  }
-
-                  Button {
-                    visible: root.nextPage !== ""
-                    text: "Load more"
-                    bordered: true
-                    enabled: !root.busy
-                    onClicked: root.loadMore()
-                  }
-
-                  Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    visible: root.selectedReview !== null && (!root.selectedReview.response)
-                    text: String(replyArea.text.length) + " / 4000"
-                    color: replyArea.text.length > 4000 ? root.urgent : root.dim
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                  }
-                }
-              }
+            Button {
+              visible: root.nextPage !== ""
+              text: "Load more"
+              bordered: true
+              enabled: !root.busy
+              onClicked: root.loadMore()
             }
           }
         }
