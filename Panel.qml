@@ -28,9 +28,17 @@ Panel {
   property string keyId: ""
   property string keyPath: ""
   property bool configured: false
+  property bool appleConfigured: false
+  property bool playConfigured: false
   property bool keyPathExists: false
+  property string playKeyPath: ""
+  property bool playKeyPathExists: false
   property var apps: []
   property var watchedAppIds: []
+  property var activeFamilyIds: []
+  property var cliQueue: []
+  property var reviewsByApp: ({})
+  property var nextByApp: ({})
   property string activeAppId: ""
   property var reviews: []
   property string nextPage: ""
@@ -58,6 +66,8 @@ Panel {
     }
     return list
   }
+  readonly property var appGroups: groupAppList(apps)
+  readonly property var watchedGroups: groupAppList(resolveWatchedApps(watchedAppIds, apps))
 
   function parseEnvelope(raw) {
     try {
@@ -100,14 +110,298 @@ Panel {
     return id
   }
 
+  function storeOf(value) {
+    if (!value) return "apple"
+    if (typeof value === "string")
+      return value.indexOf("play:") === 0 ? "play" : "apple"
+    if (value.store === "play") return "play"
+    return String(value.id || "").indexOf("play:") === 0 ? "play" : "apple"
+  }
+
+  function storeIcon(store) {
+    return String(store) === "play" ? "󰀲" : "󰀵"
+  }
+
+  function lastBundleSegment(app) {
+    var bundle = String((app && app.bundleId) || "")
+    if (bundle === "") {
+      var raw = String((app && app.id) || "")
+      if (raw.indexOf("play:") === 0) raw = raw.slice(5)
+      if (raw.indexOf("apple:") === 0) raw = raw.slice(6)
+      bundle = raw
+    }
+    var parts = bundle.split(".")
+    return String(parts[parts.length - 1] || "").trim().toLowerCase()
+  }
+
+  function appFamilyKeys(app) {
+    var keys = []
+    var name = String((app && app.name) || "").trim().toLowerCase()
+    var seg = lastBundleSegment(app)
+    var generic = { app: 1, ios: 1, android: 1, mobile: 1, free: 1, lite: 1, pro: 1 }
+    if (name !== "" && name.indexOf(".") < 0) keys.push("n:" + name)
+    if (seg !== "" && !generic[seg] && seg.length >= 2) keys.push("s:" + seg)
+    if (keys.length === 0) keys.push("i:" + String((app && app.id) || ""))
+    return keys
+  }
+
+  function groupAppList(list) {
+    var items = []
+    var index
+    for (index = 0; index < list.length; index += 1) {
+      if (list[index] && list[index].id) items.push(list[index])
+    }
+    var parent = []
+    for (index = 0; index < items.length; index += 1) parent.push(index)
+    function find(ix) {
+      if (parent[ix] !== ix) parent[ix] = find(parent[ix])
+      return parent[ix]
+    }
+    function union(left, right) {
+      var leftRoot = find(left)
+      var rightRoot = find(right)
+      if (leftRoot !== rightRoot) parent[leftRoot] = rightRoot
+    }
+    var owner = ({})
+    for (index = 0; index < items.length; index += 1) {
+      var keys = appFamilyKeys(items[index])
+      for (var keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+        var key = keys[keyIndex]
+        if (owner[key] === undefined) owner[key] = index
+        else union(owner[key], index)
+      }
+    }
+    var buckets = ({})
+    var roots = []
+    for (index = 0; index < items.length; index += 1) {
+      var root = find(index)
+      if (!buckets[root]) {
+        buckets[root] = []
+        roots.push(root)
+      }
+      buckets[root].push(items[index])
+    }
+    var groups = []
+    for (index = 0; index < roots.length; index += 1) {
+      var members = buckets[roots[index]].slice()
+      members.sort(function(left, right) {
+        var leftPlay = storeOf(left) === "play" ? 1 : 0
+        var rightPlay = storeOf(right) === "play" ? 1 : 0
+        if (leftPlay !== rightPlay) return leftPlay - rightPlay
+        return String(left.name || "").localeCompare(String(right.name || ""))
+      })
+      var named = ""
+      for (var memberIndex = 0; memberIndex < members.length; memberIndex += 1) {
+        var label = String(members[memberIndex].name || "")
+        if (label !== "" && label.indexOf(".") < 0) {
+          named = label
+          break
+        }
+      }
+      if (named === "") named = String(members[0].name || members[0].id)
+      groups.push({
+        id: members.map(function(item) { return item.id }).join(","),
+        name: named,
+        members: members
+      })
+    }
+    return groups
+  }
+
+  function resolveWatchedApps(ids, allApps) {
+    var list = []
+    for (var index = 0; index < ids.length; index += 1) {
+      var id = String(ids[index] || "")
+      var found = null
+      for (var appIndex = 0; appIndex < allApps.length; appIndex += 1) {
+        if (String(allApps[appIndex].id) === id) found = allApps[appIndex]
+      }
+      list.push(found || {
+        id: id,
+        name: appNameFor(id),
+        bundleId: id.indexOf("play:") === 0 ? id.slice(5) : "",
+        sku: "",
+        store: id.indexOf("play:") === 0 ? "play" : "apple"
+      })
+    }
+    return list
+  }
+
+  function memberIds(group) {
+    var members = (group && group.members) || []
+    var ids = []
+    for (var index = 0; index < members.length; index += 1) ids.push(String(members[index].id))
+    return ids
+  }
+
+  function familyIdsFor(appId) {
+    return familyIdsForFrom(appId, apps, watchedAppIds)
+  }
+
+  function familyIdsForFrom(appId, allApps, watchedIds) {
+    var id = String(appId || "")
+    var groups = groupAppList(allApps || []).concat(groupAppList(resolveWatchedApps(watchedIds || [], allApps || [])))
+    for (var index = 0; index < groups.length; index += 1) {
+      var ids = memberIds(groups[index])
+      if (ids.indexOf(id) >= 0) return ids
+    }
+    return id !== "" ? [id] : []
+  }
+
+  function firstFamilyIds(allApps, watchedIds) {
+    var groups = groupAppList(resolveWatchedApps(watchedIds || [], allApps || []))
+    if (groups.length > 0) return memberIds(groups[0])
+    if (watchedIds && watchedIds.length > 0) return familyIdsForFrom(watchedIds[0], allApps, watchedIds)
+    return []
+  }
+
+  function groupStores(group) {
+    var stores = []
+    var seen = ({})
+    var members = (group && group.members) || []
+    for (var index = 0; index < members.length; index += 1) {
+      var store = storeOf(members[index])
+      if (!seen[store]) {
+        seen[store] = true
+        stores.push(store)
+      }
+    }
+    return stores
+  }
+
+  function groupSubtitle(group) {
+    var seen = ({})
+    var parts = []
+    var members = (group && group.members) || []
+    for (var index = 0; index < members.length; index += 1) {
+      var line = String(members[index].bundleId || members[index].id || "")
+      if (line.indexOf("play:") === 0) line = line.slice(5)
+      if (line.indexOf("apple:") === 0) line = line.slice(6)
+      if (line !== "" && !seen[line]) {
+        seen[line] = true
+        parts.push(line)
+      }
+    }
+    return parts.join(" · ")
+  }
+
+  function sameIdSet(left, right) {
+    if (left.length !== right.length) return false
+    var copy = left.slice().sort()
+    var other = right.slice().sort()
+    for (var index = 0; index < copy.length; index += 1) {
+      if (String(copy[index]) !== String(other[index])) return false
+    }
+    return true
+  }
+
+  function groupWatched(group) {
+    var ids = memberIds(group)
+    if (ids.length === 0) return false
+    for (var index = 0; index < ids.length; index += 1) {
+      if (watchedAppIds.indexOf(ids[index]) < 0) return false
+    }
+    return true
+  }
+
+  function toggleGroup(group) {
+    var ids = memberIds(group)
+    var next = watchedAppIds.slice()
+    var allOn = groupWatched(group)
+    for (var index = 0; index < ids.length; index += 1) {
+      var found = next.indexOf(ids[index])
+      if (allOn && found >= 0) next.splice(found, 1)
+      if (!allOn && found < 0) next.push(ids[index])
+    }
+    watchedAppIds = next
+  }
+
+  function addPlayPackage() {
+    var pkg = playPackageField.text.trim()
+    if (pkg.indexOf("play:") === 0) pkg = pkg.slice(5)
+    if (pkg === "") {
+      lastError = "Enter a Play package name"
+      return
+    }
+    var id = "play:" + pkg
+    var nextApps = apps.slice()
+    var found = false
+    for (var index = 0; index < nextApps.length; index += 1) {
+      if (String(nextApps[index].id) === id) found = true
+    }
+    if (!found) {
+      nextApps.push({ id: id, name: pkg, bundleId: pkg, sku: "", store: "play" })
+      apps = nextApps
+    }
+    var nextWatched = watchedAppIds.slice()
+    if (nextWatched.indexOf(id) < 0) nextWatched.push(id)
+    watchedAppIds = nextWatched
+    playPackageField.text = ""
+    lastError = ""
+  }
+
+  function reviewStore(review) {
+    if (review && review.store === "play") return "play"
+    return storeOf((review && review.appId) || activeAppId)
+  }
+
+  function replyLimitFor(review) {
+    return reviewStore(review) === "play" ? 350 : 4000
+  }
+
+  function flattenReviews(map, ids) {
+    var list = []
+    var keys = ids && ids.length > 0 ? ids : Object.keys(map)
+    for (var index = 0; index < keys.length; index += 1) {
+      var items = map[keys[index]] || []
+      for (var itemIndex = 0; itemIndex < items.length; itemIndex += 1) list.push(items[itemIndex])
+    }
+    list.sort(function(left, right) {
+      return String(right.createdDate || "").localeCompare(String(left.createdDate || ""))
+    })
+    return list
+  }
+
+  function tagReviews(appId, reviews) {
+    var tagged = []
+    for (var index = 0; index < reviews.length; index += 1) {
+      var item = reviews[index]
+      if (!item) continue
+      var copy = copyReview(item, item.response)
+      copy.appId = appId
+      if (!copy.store) copy.store = storeOf(appId)
+      tagged.push(copy)
+    }
+    return tagged
+  }
+
+  function familyHasMore() {
+    var map = nextByApp
+    var keys = Object.keys(map)
+    for (var index = 0; index < keys.length; index += 1) {
+      if (String(map[keys[index]] || "") !== "") return true
+    }
+    return false
+  }
+
   function runCli(kind, args) {
-    if (cliProcess.running) return
+    if (cliProcess.running) {
+      cliQueue = cliQueue.concat([{ kind: kind, args: args }])
+      return
+    }
     pendingKind = kind
     processOutput = ""
     processError = ""
     statusText = "Working…"
     cliProcess.command = ["bun", "run", backendPath].concat(args).concat(["--compact"])
     cliProcess.running = true
+  }
+
+  function flushCliQueue() {
+    if (cliProcess.running || cliQueue.length === 0) return
+    var next = cliQueue[0]
+    cliQueue = cliQueue.slice(1)
+    runCli(next.kind, next.args)
   }
 
   function loadOnOpen() {
@@ -135,18 +429,23 @@ Panel {
 
   function applyConfig(data) {
     configured = data.configured === true
+    appleConfigured = data.appleConfigured === true
+    playConfigured = data.playConfigured === true
     issuerId = String(data.issuerId || "")
     keyId = String(data.keyId || "")
     keyPath = String(data.keyPath || "")
     keyPathExists = data.keyPathExists === true
+    playKeyPath = String(data.playKeyPath || "")
+    playKeyPathExists = data.playKeyPathExists === true
     watchedAppIds = data.watchedAppIds instanceof Array ? data.watchedAppIds.slice() : []
     activeAppId = String(data.activeAppId || "")
     if (data.apps instanceof Array && data.apps.length > 0) apps = data.apps
     if (issuerField.text === "") issuerField.text = issuerId
     if (keyIdField.text === "") keyIdField.text = keyId
+    if (playKeyPathField.text === "") playKeyPathField.text = playKeyPath
     if (!configured) {
       view = "setup"
-      statusText = "Add an App Store Connect API key"
+      statusText = "Add App Store Connect or Google Play credentials"
       return
     }
     if (watchedAppIds.length === 0) {
@@ -156,8 +455,38 @@ Panel {
       return
     }
     view = "inbox"
-    if (activeAppId === "") activeAppId = watchedAppIds[0]
-    runCli("reviews-list", ["reviews", "list", "--app", activeAppId])
+    selectGroup(firstFamilyIds(apps, watchedAppIds), data.inbox)
+  }
+
+  function cloneMap(map) {
+    var next = ({})
+    var keys = Object.keys(map || {})
+    for (var index = 0; index < keys.length; index += 1) next[keys[index]] = map[keys[index]]
+    return next
+  }
+
+  function applyInbox(data, cached, appId) {
+    var id = String(appId || (data && data.appId) || activeAppId)
+    if (activeFamilyIds.length > 0 && activeFamilyIds.indexOf(id) < 0) return
+    var incoming = data && data.reviews instanceof Array ? data.reviews : []
+    var map = cloneMap(reviewsByApp)
+    map[id] = tagReviews(id, incoming)
+    reviewsByApp = map
+    reviews = flattenReviews(map, activeFamilyIds)
+    var nextMap = cloneMap(nextByApp)
+    nextMap[id] = String((data && data.next) || "")
+    nextByApp = nextMap
+    nextPage = familyHasMore() ? "1" : ""
+    if (selectedReview) {
+      var matched = null
+      for (var index = 0; index < reviews.length; index += 1) {
+        if (reviews[index].id === selectedReview.id) matched = reviews[index]
+      }
+      selectedReview = matched
+    }
+    statusText = cached
+      ? (incoming.length > 0 ? "Updating…" : "Loading…")
+      : String(visibleReviews.length) + " reviews"
   }
 
   function saveCredentials() {
@@ -170,6 +499,16 @@ Panel {
     }
     lastError = ""
     runCli("config-set", ["config", "set", "--issuer", issuer, "--key-id", kid, "--key", path])
+  }
+
+  function savePlayCredentials() {
+    var path = playKeyPathField.text.trim()
+    if (path === "") {
+      lastError = "The Google Play service account JSON is required"
+      return
+    }
+    lastError = ""
+    runCli("config-set-play", ["config", "set-play", "--key", path])
   }
 
   function toggleWatched(appId) {
@@ -192,12 +531,15 @@ Panel {
   function copyReview(review, response) {
     return {
       id: review.id,
+      appId: review.appId || "",
+      store: review.store || storeOf(review.appId || review.id),
       rating: review.rating,
       title: review.title,
       body: review.body,
       nickname: review.nickname,
       createdDate: review.createdDate,
       territory: review.territory,
+      version: review.version || "",
       response: response
     }
   }
@@ -224,14 +566,30 @@ Panel {
   }
 
   function selectApp(appId) {
-    if (appId === "" || busy) return
-    activeAppId = appId
+    if (appId === "") return
+    selectGroup(familyIdsFor(appId))
+  }
+
+  function selectGroup(ids, seedInbox) {
+    if (!ids || ids.length === 0) return
+    activeFamilyIds = ids.slice()
+    activeAppId = String(ids[0] || "")
     selectedReview = null
     replyDraft = ""
     pendingReviewId = ""
     pendingReplyBody = ""
     sentReviewId = ""
-    runCli("reviews-list", ["reviews", "list", "--app", appId])
+    reviewsByApp = ({})
+    nextByApp = ({})
+    reviews = []
+    nextPage = ""
+    cliQueue = []
+    if (seedInbox && seedInbox.reviews instanceof Array && seedInbox.reviews.length > 0)
+      applyInbox(seedInbox, true, seedInbox.appId)
+    for (var index = 0; index < ids.length; index += 1)
+      runCli("reviews-cached", ["reviews", "cached", "--app", ids[index]])
+    for (index = 0; index < ids.length; index += 1)
+      runCli("reviews-list", ["reviews", "list", "--app", ids[index]])
   }
 
   function toggleReview(review) {
@@ -244,7 +602,10 @@ Panel {
     }
     selectedReview = review
     if (sentReviewId !== review.id) sentReviewId = ""
-    if (!review.response) replyDraft = ""
+    if (review.response && reviewStore(review) === "play")
+      replyDraft = String(review.response.body || "")
+    else if (!review.response)
+      replyDraft = ""
   }
 
   function revealItem(item) {
@@ -261,8 +622,13 @@ Panel {
   }
 
   function loadMore() {
-    if (nextPage === "" || busy) return
-    runCli("reviews-next", ["reviews", "list", "--app", activeAppId, "--next", nextPage])
+    if (!familyHasMore() || busy) return
+    var ids = activeFamilyIds.length > 0 ? activeFamilyIds : Object.keys(nextByApp)
+    for (var index = 0; index < ids.length; index += 1) {
+      var cursor = String(nextByApp[ids[index]] || "")
+      if (cursor !== "")
+        runCli("reviews-next", ["reviews", "list", "--app", ids[index], "--next", cursor])
+    }
   }
 
   function submitReply() {
@@ -275,12 +641,12 @@ Panel {
     lastError = ""
     pendingReviewId = String(selectedReview.id || "")
     pendingReplyBody = body
-    runCli("reply", ["reviews", "reply", "--review", selectedReview.id, "--body", body])
+    runCli("reply", ["reviews", "reply", "--review", selectedReview.id, "--body", body, "--app", String(selectedReview.appId || activeAppId)])
   }
 
   function removeReply() {
     if (!selectedReview || !selectedReview.response || busy) return
-    runCli("delete-reply", ["reviews", "delete-reply", "--response", selectedReview.response.id])
+    runCli("delete-reply", ["reviews", "delete-reply", "--response", selectedReview.response.id, "--app", String(selectedReview.appId || activeAppId)])
   }
 
   function handleResult(kind, envelope) {
@@ -288,14 +654,18 @@ Panel {
       lastError = (envelope && envelope.error && envelope.error.message)
         || processError
         || "Request failed"
-      statusText = lastError
+      if ((kind === "reviews-list" || kind === "reviews-next") && reviews.length > 0)
+        statusText = lastError + " · showing cached reviews"
+      else
+        statusText = lastError
       return
     }
     lastError = ""
     var data = envelope.data || {}
-    if (kind === "config-show" || kind === "config-set") {
+    if (kind === "config-show" || kind === "config-set" || kind === "config-set-play") {
       applyConfig(data)
       if (kind === "config-set") statusText = "API key saved"
+      if (kind === "config-set-play") statusText = "Play service account saved"
       return
     }
     if (kind === "apps") {
@@ -307,21 +677,15 @@ Panel {
       watchedAppIds = data.watchedAppIds instanceof Array ? data.watchedAppIds : watchedAppIds
       activeAppId = String(data.activeAppId || activeAppId)
       view = "inbox"
-      selectApp(activeAppId)
+      selectGroup(firstFamilyIds(apps, watchedAppIds))
+      return
+    }
+    if (kind === "reviews-cached") {
+      applyInbox(data, true, data.appId)
       return
     }
     if (kind === "reviews-list" || kind === "reviews-next") {
-      var incoming = data.reviews instanceof Array ? data.reviews : []
-      reviews = kind === "reviews-next" ? reviews.concat(incoming) : incoming
-      nextPage = String(data.next || "")
-      if (selectedReview) {
-        var matched = null
-        for (var index = 0; index < reviews.length; index += 1) {
-          if (reviews[index].id === selectedReview.id) matched = reviews[index]
-        }
-        selectedReview = matched
-      }
-      statusText = String(visibleReviews.length) + " reviews"
+      applyInbox(data, false, data.appId)
       return
     }
     if (kind === "reply") {
@@ -359,6 +723,14 @@ Panel {
     onAccepted: keyPathField.text = root.filePathFromUrl(String(selectedFile))
   }
 
+  FileDialog {
+    id: playKeyDialog
+    title: "Choose the Google Play service account JSON"
+    fileMode: FileDialog.OpenFile
+    nameFilters: ["Service account (*.json)", "All files (*)"]
+    onAccepted: playKeyPathField.text = root.filePathFromUrl(String(selectedFile))
+  }
+
   Process {
     id: cliProcess
     stdout: StdioCollector {
@@ -370,8 +742,10 @@ Panel {
       onStreamFinished: root.processError = String(text || "").trim()
     }
     onExited: function() {
-      root.handleResult(root.pendingKind, root.parseEnvelope(root.processOutput))
+      var kind = root.pendingKind
       root.pendingKind = ""
+      root.handleResult(kind, root.parseEnvelope(root.processOutput))
+      root.flushCliQueue()
     }
   }
 
@@ -410,7 +784,7 @@ Panel {
           PanelHero {
             width: parent.width
             title: "Customer Reviews"
-            meta: root.view === "setup" ? "App Store Connect" : (root.view === "apps" ? "Watched apps" : "Inbox")
+            meta: root.view === "setup" ? "Stores" : (root.view === "apps" ? "Watched apps" : "Inbox")
             detail: root.statusText
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -430,6 +804,15 @@ Panel {
             width: parent.width
             spacing: Style.space(10)
             visible: root.view === "setup"
+
+            Text {
+              width: parent.width
+              text: "App Store Connect"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
 
             Text {
               width: parent.width
@@ -481,6 +864,52 @@ Panel {
               enabled: !root.busy
               onClicked: root.saveCredentials()
             }
+
+            Text {
+              width: parent.width
+              text: "Google Play"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              text: "1. In Google Cloud, enable Google Play Android Developer API and create a service account JSON key.\n2. In Play Console, link that Cloud project under Setup → API access, then invite the service account with Reply to reviews.\n3. Choose the JSON below. Play only returns the last 7 days of commented production reviews."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+
+              TextField {
+                id: playKeyPathField
+                width: parent.width - playBrowseButton.width - parent.spacing
+                placeholderText: "Path to play-service-account.json"
+                foreground: root.foreground
+              }
+
+              Button {
+                id: playBrowseButton
+                text: "Browse"
+                bordered: true
+                onClicked: playKeyDialog.open()
+              }
+            }
+
+            Button {
+              text: root.busy ? "Saving…" : "Save service account"
+              iconText: root.busy ? "󰑓" : "󰆓"
+              iconSpinning: root.busy
+              bordered: true
+              enabled: !root.busy
+              onClicked: root.savePlayCredentials()
+            }
           }
 
           Column {
@@ -498,11 +927,13 @@ Panel {
             }
 
             Repeater {
-              model: root.apps
+              model: root.appGroups
 
               Rectangle {
+                id: appCard
                 required property var modelData
-                readonly property bool watched: root.watchedAppIds.indexOf(modelData.id) >= 0
+                readonly property bool watched: root.groupWatched(modelData)
+                readonly property var stores: root.groupStores(modelData)
                 width: content.width
                 height: appLabel.implicitHeight + Style.space(16)
                 radius: Style.space(8)
@@ -519,16 +950,32 @@ Panel {
                   anchors.rightMargin: Style.space(12)
                   spacing: Style.space(2)
 
-                  Text {
-                    text: String(modelData.name || modelData.id)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
+                  Row {
+                    spacing: Style.space(8)
+
+                    Repeater {
+                      model: appCard.stores
+
+                      Text {
+                        required property var modelData
+                        text: root.storeIcon(modelData)
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.body
+                      }
+                    }
+
+                    Text {
+                      text: String(modelData.name || modelData.id)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                    }
                   }
 
                   Text {
-                    text: String(modelData.bundleId || "")
+                    text: root.groupSubtitle(modelData)
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
@@ -538,8 +985,29 @@ Panel {
                 MouseArea {
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.toggleWatched(parent.modelData.id)
+                  onClicked: root.toggleGroup(parent.modelData)
                 }
+              }
+            }
+
+            Row {
+              width: parent.width
+              spacing: Style.space(8)
+              visible: root.playConfigured
+
+              TextField {
+                id: playPackageField
+                width: parent.width - addPlayButton.width - parent.spacing
+                placeholderText: "Add Play package (com.example.app)"
+                foreground: root.foreground
+              }
+
+              Button {
+                id: addPlayButton
+                text: "Add"
+                bordered: true
+                enabled: !root.busy
+                onClicked: root.addPlayPackage()
               }
             }
 
@@ -571,37 +1039,50 @@ Panel {
               spacing: Style.space(6)
 
               Repeater {
-                model: root.watchedAppIds
+                model: root.watchedGroups
 
                 Rectangle {
+                  id: watchChip
                   required property var modelData
-                  readonly property bool active: modelData === root.activeAppId
-                  readonly property var app: {
-                    for (var index = 0; index < root.apps.length; index += 1) {
-                      if (root.apps[index].id === modelData) return root.apps[index]
-                    }
-                    return { id: modelData, name: modelData }
-                  }
-                  width: chipText.implicitWidth + Style.space(20)
-                  height: chipText.implicitHeight + Style.space(10)
+                  readonly property var ids: root.memberIds(modelData)
+                  readonly property bool active: root.sameIdSet(ids, root.activeFamilyIds)
+                  readonly property var stores: root.groupStores(modelData)
+                  width: chipRow.implicitWidth + Style.space(20)
+                  height: chipRow.implicitHeight + Style.space(10)
                   radius: height / 2
                   color: active ? Util.alpha(Color.accent, 0.22) : Util.alpha(root.foreground, 0.07)
                   border.width: active ? 1 : 0
                   border.color: Color.accent
 
-                  Text {
-                    id: chipText
+                  Row {
+                    id: chipRow
                     anchors.centerIn: parent
-                    text: String(parent.app.name || parent.modelData)
-                    color: root.foreground
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
+                    spacing: Style.space(6)
+
+                    Repeater {
+                      model: watchChip.stores
+
+                      Text {
+                        required property var modelData
+                        text: root.storeIcon(modelData)
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+                    }
+
+                    Text {
+                      text: String(watchChip.modelData.name || watchChip.ids[0] || "")
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                    }
                   }
 
                   MouseArea {
                     anchors.fill: parent
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.selectApp(parent.modelData)
+                    onClicked: root.selectGroup(watchChip.ids)
                   }
                 }
               }
@@ -757,14 +1238,27 @@ Panel {
                         }
                       }
 
-                      Text {
+                      Row {
                         width: parent.width
-                        text: [modelData.nickname, modelData.territory, root.shortDate(modelData.createdDate)].filter(function(value) {
-                          return String(value || "") !== ""
-                        }).join(" · ")
-                        color: root.dim
-                        font.family: root.fontFamily
-                        font.pixelSize: Style.font.caption
+                        spacing: Style.space(6)
+
+                        Text {
+                          text: root.storeIcon(modelData.store)
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                        }
+
+                        Text {
+                          width: parent.width - Style.space(22)
+                          text: [modelData.version, modelData.nickname, modelData.territory, root.shortDate(modelData.createdDate)].filter(function(value) {
+                            return String(value || "") !== ""
+                          }).join(" · ")
+                          color: root.dim
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideRight
+                        }
                       }
                     }
 
@@ -893,7 +1387,7 @@ Panel {
 
                       Text {
                         width: parent.width
-                        visible: reviewCard.hasReply
+                        visible: reviewCard.hasReply && root.reviewStore(modelData) !== "play"
                         text: "Your reply to " + root.reviewerName(modelData)
                         color: root.dim
                         font.family: root.fontFamily
@@ -903,7 +1397,7 @@ Panel {
 
                       Text {
                         width: parent.width
-                        visible: reviewCard.hasReply
+                        visible: reviewCard.hasReply && root.reviewStore(modelData) !== "play"
                         text: reviewCard.hasReply ? String(modelData.response.body || "") : ""
                         color: root.foreground
                         font.family: root.fontFamily
@@ -911,11 +1405,13 @@ Panel {
                         wrapMode: Text.WordWrap
                       }
 
-                      Loader {
+                        Loader {
                         id: composerLoader
                         width: parent.width
-                        height: reviewCard.hasReply ? 0 : (item ? item.boxHeight : Style.space(160))
-                        active: !reviewCard.hasReply && (reviewCard.expanded || expandWrap.height > 8)
+                        height: (!reviewCard.hasReply || root.reviewStore(modelData) === "play")
+                          ? (item ? item.boxHeight : Style.space(160))
+                          : 0
+                        active: (!reviewCard.hasReply || root.reviewStore(modelData) === "play") && (reviewCard.expanded || expandWrap.height > 8)
 
                         sourceComponent: Component {
                           Item {
@@ -977,7 +1473,15 @@ Panel {
                         }
 
                         Button {
-                          visible: reviewCard.hasReply
+                          visible: reviewCard.hasReply && root.reviewStore(modelData) === "play"
+                          text: root.busy ? "Saving…" : "Update reply"
+                          bordered: true
+                          enabled: !root.busy
+                          onClicked: root.submitReply()
+                        }
+
+                        Button {
+                          visible: reviewCard.hasReply && root.reviewStore(modelData) !== "play"
                           text: "Delete reply"
                           bordered: true
                           enabled: !root.busy
@@ -986,9 +1490,9 @@ Panel {
 
                         Text {
                           anchors.verticalCenter: parent.verticalCenter
-                          visible: !reviewCard.hasReply
-                          text: String(root.replyDraft.length) + " / 4000"
-                          color: root.replyDraft.length > 4000 ? root.urgent : root.dim
+                          visible: !reviewCard.hasReply || root.reviewStore(modelData) === "play"
+                          text: String(root.replyDraft.length) + " / " + root.replyLimitFor(modelData)
+                          color: root.replyDraft.length > root.replyLimitFor(modelData) ? root.urgent : root.dim
                           font.family: root.fontFamily
                           font.pixelSize: Style.font.caption
                         }

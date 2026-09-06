@@ -55,7 +55,7 @@ describe("mapApps", () => {
       ],
     });
     expect(apps).toEqual([
-      { id: "app-1", name: "Brifdo", bundleId: "com.brifdo.app", sku: "BRIFDO" },
+      { id: "app-1", name: "Brifdo", bundleId: "com.brifdo.app", sku: "BRIFDO", store: "apple" },
     ]);
   });
 });

@@ -80,6 +80,7 @@ export function mapApps(payload: unknown): AppInfo[] {
       name: stringValue(attributes.name),
       bundleId: stringValue(attributes.bundleId),
       sku: stringValue(attributes.sku),
+      store: "apple" as const,
     };
   }).filter((app) => app.id !== "");
 }
@@ -110,12 +111,14 @@ export function mapReviews(payload: unknown): Omit<ReviewList, "appId"> {
     const responseId = stringValue(responseRel.id);
     return {
       id: stringValue(record.id),
+      store: "apple" as const,
       rating: numberValue(attributes.rating),
       title: stringValue(attributes.title),
       body: stringValue(attributes.body),
       nickname: stringValue(attributes.reviewerNickname),
       createdDate: stringValue(attributes.createdDate),
       territory: stringValue(attributes.territory),
+      version: "",
       response: responseId ? included.get(responseId) ?? { id: responseId, body: "", lastModifiedDate: "", state: "" } : null,
     };
   }).filter((review) => review.id !== "");

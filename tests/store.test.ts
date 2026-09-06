@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { saveConfig } from "../backend/config";
 import type { AppInfo, Review } from "../backend/model";
+import { listCachedInbox } from "../backend/inbox-db";
 import { runPoll } from "../backend/store";
 
 async function tempDir(name: string): Promise<string> {
@@ -14,12 +15,14 @@ async function tempDir(name: string): Promise<string> {
 function review(id: string, extras: Partial<Review> = {}): Review {
   return {
     id,
+    store: "apple",
     rating: 5,
     title: `Title ${id}`,
     body: `Body ${id}`,
     nickname: "Pat",
     createdDate: "2026-09-01T00:00:00Z",
     territory: "USA",
+    version: "",
     response: null,
     ...extras,
   };
@@ -39,7 +42,7 @@ describe("runPoll", () => {
       activeAppId: "app-1",
     });
 
-    const apps: AppInfo[] = [{ id: "app-1", name: "Brifdo", bundleId: "com.brifdo.app", sku: "B" }];
+    const apps: AppInfo[] = [{ id: "app-1", name: "Brifdo", bundleId: "com.brifdo.app", sku: "B", store: "apple" }];
     let reviews = [review("rev-1"), review("rev-2", { rating: 1, title: "Bad" })];
 
     const first = await runPoll({
@@ -51,6 +54,7 @@ describe("runPoll", () => {
     expect(first.configured).toBe(true);
     expect(first.unrepliedCount).toBe(2);
     expect(first.newReviews).toEqual([]);
+    expect(listCachedInbox(cacheDir, "app-1").reviews.map((item) => item.id).sort()).toEqual(["rev-1", "rev-2"]);
 
     reviews = [review("rev-1"), review("rev-2"), review("rev-3", { title: "New one" })];
     const second = await runPoll({
@@ -81,8 +85,8 @@ describe("runPoll", () => {
       configDir,
       cacheDir,
       fetchApps: async () => [
-        { id: "app-ok", name: "Ok", bundleId: "ok", sku: "OK" },
-        { id: "app-bad", name: "Bad", bundleId: "bad", sku: "BAD" },
+        { id: "app-ok", name: "Ok", bundleId: "ok", sku: "OK", store: "apple" },
+        { id: "app-bad", name: "Bad", bundleId: "bad", sku: "BAD", store: "apple" },
       ],
       fetchReviews: async (appId) => {
         if (appId === "app-bad") throw new Error("boom");
@@ -96,8 +100,8 @@ describe("runPoll", () => {
       configDir,
       cacheDir,
       fetchApps: async () => [
-        { id: "app-ok", name: "Ok", bundleId: "ok", sku: "OK" },
-        { id: "app-bad", name: "Bad", bundleId: "bad", sku: "BAD" },
+        { id: "app-ok", name: "Ok", bundleId: "ok", sku: "OK", store: "apple" },
+        { id: "app-bad", name: "Bad", bundleId: "bad", sku: "BAD", store: "apple" },
       ],
       fetchReviews: async (appId) => {
         if (appId === "app-bad") return { reviews: [review("bad-1")], next: "" };
@@ -140,7 +144,7 @@ describe("runPoll", () => {
       watchedAppIds: ["app-1"],
       activeAppId: "app-1",
     });
-    const apps: AppInfo[] = [{ id: "app-1", name: "App", bundleId: "app", sku: "A" }];
+    const apps: AppInfo[] = [{ id: "app-1", name: "App", bundleId: "app", sku: "A", store: "apple" }];
 
     await runPoll({
       configDir,

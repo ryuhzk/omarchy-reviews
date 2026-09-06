@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isConfigured, loadConfig } from "./config";
+import { rememberReviews } from "./inbox-db";
 import type { AppInfo, NewReview, PollResult, Review, ReviewList } from "./model";
 
 export interface PollDeps {
@@ -28,7 +29,7 @@ export async function runPoll(deps: PollDeps): Promise<PollResult> {
   for (const appId of config.watchedAppIds) {
     try {
       const page = await deps.fetchReviews(appId);
-      writeJson(join(deps.cacheDir, `reviews-${appId}.json`), page);
+      rememberReviews(deps.cacheDir, appId, page.reviews, page.next);
       const appName = apps.find((app) => app.id === appId)?.name || appId;
       const alreadySeeded = seededApps.has(appId);
       for (const review of page.reviews) {
@@ -60,8 +61,17 @@ export function readCachedApps(cacheDir: string): AppInfo[] {
   if (!existsSync(path)) return [];
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is AppInfo => {
-      return Boolean(item && typeof item === "object" && typeof (item as AppInfo).id === "string");
+    return Array.isArray(parsed) ? parsed.flatMap((item) => {
+      if (!item || typeof item !== "object" || typeof (item as AppInfo).id !== "string") return [];
+      const app = item as AppInfo;
+      const store = app.store === "play" || String(app.id).startsWith("play:") ? "play" as const : "apple" as const;
+      return [{
+        id: app.id,
+        name: String(app.name || app.id),
+        bundleId: String(app.bundleId || ""),
+        sku: String(app.sku || ""),
+        store,
+      }];
     }) : [];
   } catch {
     return [];

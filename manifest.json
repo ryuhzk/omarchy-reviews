@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "ryuhzk",
   "license": "MIT",
-  "description": "Read and reply to App Store customer reviews from the Omarchy bar.",
+  "description": "Read and reply to App Store and Google Play customer reviews from the Omarchy bar.",
   "kinds": ["service", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "Customer Reviews",
-    "description": "Inbox for App Store customer reviews, with replies and a watched-app badge.",
+    "description": "Inbox for App Store and Google Play customer reviews, with replies and a watched-app badge.",
     "category": "Development",
     "allowMultiple": false,
     "defaultSection": "center",

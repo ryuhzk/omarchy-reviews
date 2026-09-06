@@ -88,6 +88,20 @@ describe("config", () => {
     expect(loaded.issuerId).toBe("ISS");
   });
 
+  test("is configured with only a Play service account file", async () => {
+    const dir = await tempDir("play-only");
+    const keyPath = join(dir, "play-service-account.json");
+    await writeFile(keyPath, "{\"client_email\":\"a@b.com\",\"private_key\":\"x\"}\n", { mode: 0o600 });
+    await saveConfig(dir, { playServiceAccountPath: keyPath });
+
+    const shown = showConfig(dir);
+    expect(shown.configured).toBe(true);
+    expect(shown.appleConfigured).toBe(false);
+    expect(shown.playConfigured).toBe(true);
+    expect(shown.playKeyPath).toBe(keyPath);
+    expect(isConfigured(loadConfig(dir))).toBe(true);
+  });
+
   test("ignores an unreadable leftover temp file after a successful save", async () => {
     const dir = await tempDir("empty");
     expect(loadConfig(dir).issuerId).toBe("");

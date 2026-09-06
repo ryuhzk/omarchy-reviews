@@ -13,14 +13,23 @@ export function emptyConfig(): PluginConfig {
     issuerId: "",
     keyId: "",
     privateKeyPath: "",
+    playServiceAccountPath: "",
     watchedAppIds: [],
     activeAppId: "",
   };
 }
 
-export function isConfigured(config: PluginConfig): boolean {
+export function isAppleConfigured(config: PluginConfig): boolean {
   return config.issuerId !== "" && config.keyId !== "" && config.privateKeyPath !== ""
     && existsSync(config.privateKeyPath);
+}
+
+export function isPlayConfigured(config: PluginConfig): boolean {
+  return config.playServiceAccountPath !== "" && existsSync(config.playServiceAccountPath);
+}
+
+export function isConfigured(config: PluginConfig): boolean {
+  return isAppleConfigured(config) || isPlayConfigured(config);
 }
 
 export function loadConfig(dir: string): PluginConfig {
@@ -44,6 +53,7 @@ export function loadConfig(dir: string): PluginConfig {
     issuerId: values.ASC_ISSUER_ID ?? "",
     keyId: values.ASC_KEY_ID ?? "",
     privateKeyPath: values.ASC_PRIVATE_KEY_PATH ?? "",
+    playServiceAccountPath: values.PLAY_SERVICE_ACCOUNT_PATH ?? "",
     watchedAppIds: parseIdList(values.WATCHED_APP_IDS ?? ""),
     activeAppId: values.ACTIVE_APP_ID ?? "",
   };
@@ -53,10 +63,14 @@ export function showConfig(dir: string): ConfigShow {
   const config = loadConfig(dir);
   return {
     configured: isConfigured(config),
+    appleConfigured: isAppleConfigured(config),
+    playConfigured: isPlayConfigured(config),
     issuerId: config.issuerId,
     keyId: config.keyId,
     keyPath: config.privateKeyPath,
     keyPathExists: config.privateKeyPath !== "" && existsSync(config.privateKeyPath),
+    playKeyPath: config.playServiceAccountPath,
+    playKeyPathExists: isPlayConfigured(config),
     watchedAppIds: config.watchedAppIds,
     activeAppId: config.activeAppId,
   };
@@ -71,6 +85,7 @@ export async function saveConfig(dir: string, patch: Partial<PluginConfig>): Pro
     `ASC_ISSUER_ID=${next.issuerId}`,
     `ASC_KEY_ID=${next.keyId}`,
     `ASC_PRIVATE_KEY_PATH=${next.privateKeyPath}`,
+    `PLAY_SERVICE_ACCOUNT_PATH=${next.playServiceAccountPath}`,
     `WATCHED_APP_IDS=${next.watchedAppIds.join(",")}`,
     `ACTIVE_APP_ID=${next.activeAppId}`,
     "",
