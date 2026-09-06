@@ -36,6 +36,7 @@ Panel {
   property string nextPage: ""
   property var selectedReview: null
   property string replyDraft: ""
+  property int replyPaneWidth: 340
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -277,7 +278,7 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(root.panelWidth))
-    contentHeight: panel.fittedContentHeight(Style.space(720), Style.space(780))
+    contentHeight: panel.fittedContentHeight(Style.space(820), Style.space(900))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -529,118 +530,202 @@ Panel {
               }
             }
 
-            Row {
+            Item {
+              id: inboxBody
               width: parent.width
-              spacing: Style.space(12)
+              height: Style.space(500)
 
-              ListView {
-                width: parent.width * 0.42
-                height: Style.space(360)
-                clip: true
-                model: root.visibleReviews
-                spacing: Style.space(6)
-                boundsBehavior: Flickable.StopAtBounds
+              readonly property int handleWidth: Style.space(10)
+              readonly property int minLeftWidth: Style.space(260)
+              readonly property int minReplyWidth: Style.space(240)
 
-                delegate: Rectangle {
-                  required property var modelData
-                  width: ListView.view.width
-                  height: reviewSummary.implicitHeight + Style.space(14)
-                  radius: Style.space(8)
-                  color: root.selectedReview && root.selectedReview.id === modelData.id
-                    ? Style.selectedFillFor(root.foreground, Color.accent)
-                    : Util.alpha(root.foreground, 0.05)
+              function clampReplyWidth(value) {
+                var maxReply = Math.max(inboxBody.minReplyWidth, inboxBody.width - inboxBody.minLeftWidth - inboxBody.handleWidth)
+                return Math.max(inboxBody.minReplyWidth, Math.min(maxReply, value))
+              }
+
+              onWidthChanged: root.replyPaneWidth = clampReplyWidth(root.replyPaneWidth)
+
+              Item {
+                id: leftPane
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: splitHandle.left
+                anchors.rightMargin: Style.space(4)
+
+                ListView {
+                  id: reviewList
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  height: Math.round(parent.height * 0.38)
+                  clip: true
+                  model: root.visibleReviews
+                  spacing: Style.space(6)
+                  boundsBehavior: Flickable.StopAtBounds
+
+                  delegate: Rectangle {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: reviewSummary.implicitHeight + Style.space(14)
+                    radius: Style.space(8)
+                    color: root.selectedReview && root.selectedReview.id === modelData.id
+                      ? Style.selectedFillFor(root.foreground, Color.accent)
+                      : Util.alpha(root.foreground, 0.05)
+
+                    Column {
+                      id: reviewSummary
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      anchors.margins: Style.space(10)
+                      spacing: Style.space(3)
+
+                      Text {
+                        width: parent.width
+                        text: root.stars(modelData.rating) + "  " + String(modelData.title || "Untitled")
+                        color: root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                        elide: Text.ElideRight
+                      }
+
+                      Text {
+                        text: String(modelData.nickname || "Customer") + " · " + root.shortDate(modelData.createdDate)
+                        color: root.dim
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.caption
+                      }
+                    }
+
+                    MouseArea {
+                      anchors.fill: parent
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: {
+                        root.selectedReview = modelData
+                        replyArea.text = ""
+                      }
+                    }
+                  }
+                }
+
+                Flickable {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: reviewList.bottom
+                  anchors.topMargin: Style.space(10)
+                  anchors.bottom: parent.bottom
+                  clip: true
+                  contentWidth: width
+                  contentHeight: reviewDetail.implicitHeight
+                  boundsBehavior: Flickable.StopAtBounds
+                  flickableDirection: Flickable.VerticalFlick
+                  interactive: contentHeight > height
 
                   Column {
-                    id: reviewSummary
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.margins: Style.space(10)
-                    spacing: Style.space(3)
+                    id: reviewDetail
+                    width: parent.width
+                    spacing: Style.space(8)
 
                     Text {
-                      text: root.stars(modelData.rating) + "  " + String(modelData.title || "Untitled")
+                      width: parent.width
+                      visible: root.selectedReview !== null
+                      text: root.selectedReview
+                        ? root.stars(root.selectedReview.rating) + "  " + String(root.selectedReview.title || "Untitled")
+                        : "Select a review"
                       color: root.foreground
                       font.family: root.fontFamily
-                      font.pixelSize: Style.font.bodySmall
+                      font.pixelSize: Style.font.subtitle
                       font.bold: true
-                      elide: Text.ElideRight
-                      width: parent.width
+                      wrapMode: Text.WordWrap
                     }
 
                     Text {
-                      text: String(modelData.nickname || "Customer") + " · " + root.shortDate(modelData.createdDate)
+                      width: parent.width
+                      visible: root.selectedReview !== null
+                      text: root.selectedReview
+                        ? [root.selectedReview.nickname, root.selectedReview.territory, root.shortDate(root.selectedReview.createdDate)].filter(function(value) {
+                            return String(value || "") !== ""
+                          }).join(" · ")
+                        : ""
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption
                     }
-                  }
 
-                  MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: {
-                      root.selectedReview = modelData
-                      replyArea.text = ""
+                    Text {
+                      width: parent.width
+                      visible: root.selectedReview !== null
+                      text: root.selectedReview ? String(root.selectedReview.body || "") : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      wrapMode: Text.WordWrap
                     }
                   }
                 }
               }
 
-              Column {
-                width: parent.width * 0.58 - parent.spacing
-                spacing: Style.space(8)
+              Rectangle {
+                id: splitHandle
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: replyPane.left
+                width: inboxBody.handleWidth
+                radius: width / 2
+                color: splitDrag.containsMouse || splitDrag.pressed
+                  ? Color.accent
+                  : Util.alpha(root.foreground, 0.22)
 
-                Text {
-                  width: parent.width
-                  visible: root.selectedReview !== null
-                  text: root.selectedReview
-                    ? root.stars(root.selectedReview.rating) + "  " + String(root.selectedReview.title || "Untitled")
-                    : ""
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                  wrapMode: Text.WordWrap
+                MouseArea {
+                  id: splitDrag
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.SizeHorCursor
+                  property int pressWidth: 0
+                  property real pressX: 0
+
+                  onPressed: function(mouse) {
+                    pressWidth = root.replyPaneWidth
+                    pressX = mapToItem(inboxBody, mouse.x, 0).x
+                  }
+
+                  onPositionChanged: function(mouse) {
+                    if (!pressed) return
+                    var nowX = mapToItem(inboxBody, mouse.x, 0).x
+                    root.replyPaneWidth = inboxBody.clampReplyWidth(pressWidth + (pressX - nowX))
+                  }
                 }
+              }
+
+              Item {
+                id: replyPane
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                anchors.right: parent.right
+                width: inboxBody.clampReplyWidth(root.replyPaneWidth)
 
                 Text {
-                  width: parent.width
-                  visible: root.selectedReview !== null
-                  text: root.selectedReview
-                    ? [root.selectedReview.nickname, root.selectedReview.territory, root.shortDate(root.selectedReview.createdDate)].filter(function(value) { return String(value || "") !== "" }).join(" · ")
-                    : ""
+                  id: replyLabel
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  text: root.selectedReview && root.selectedReview.response ? "Your reply" : "Reply"
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
-                }
-
-                Text {
-                  width: parent.width
-                  visible: root.selectedReview !== null
-                  text: root.selectedReview ? String(root.selectedReview.body || "") : "Select a review"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  wrapMode: Text.WordWrap
-                }
-
-                Text {
-                  width: parent.width
-                  visible: root.selectedReview && root.selectedReview.response
-                  text: root.selectedReview && root.selectedReview.response
-                    ? "Your reply\n" + String(root.selectedReview.response.body || "")
-                    : ""
-                  color: root.dim
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  wrapMode: Text.WordWrap
+                  font.bold: true
                 }
 
                 BorderSurface {
-                  width: parent.width
-                  height: Style.space(90)
-                  visible: root.selectedReview !== null && (!root.selectedReview.response)
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: replyLabel.bottom
+                  anchors.topMargin: Style.space(6)
+                  anchors.bottom: replyActions.top
+                  anchors.bottomMargin: Style.space(8)
                   color: Style.controlFill(replyArea.activeFocus, replyArea.hovered, root.foreground, Color.accent)
                   borderSpec: Border.controlSpec(replyArea.activeFocus ? "focus" : "normal", root.foreground, Color.accent)
                   radius: Style.cornerRadius
@@ -648,19 +733,47 @@ Panel {
                   TextArea {
                     id: replyArea
                     anchors.fill: parent
-                    anchors.margins: Style.space(8)
+                    anchors.margins: Style.space(10)
+                    visible: root.selectedReview !== null && (!root.selectedReview.response)
                     placeholderText: "Write a public reply"
                     wrapMode: TextEdit.Wrap
+                    selectByMouse: true
                     color: root.foreground
                     selectionColor: Style.selectionFillFor(root.foreground, Color.accent)
                     selectedTextColor: root.foreground
                     font.family: root.fontFamily
-                    font.pixelSize: Style.font.bodySmall
+                    font.pixelSize: Style.font.body
                     background: null
+                  }
+
+                  Flickable {
+                    anchors.fill: parent
+                    anchors.margins: Style.space(10)
+                    visible: root.selectedReview && root.selectedReview.response
+                    clip: true
+                    contentWidth: width
+                    contentHeight: publishedReply.implicitHeight
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Text {
+                      id: publishedReply
+                      width: parent.width
+                      text: root.selectedReview && root.selectedReview.response
+                        ? String(root.selectedReview.response.body || "")
+                        : ""
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      wrapMode: Text.WordWrap
+                    }
                   }
                 }
 
                 Row {
+                  id: replyActions
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.bottom: parent.bottom
                   spacing: Style.space(8)
 
                   Button {
@@ -685,6 +798,15 @@ Panel {
                     bordered: true
                     enabled: !root.busy
                     onClicked: root.loadMore()
+                  }
+
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.selectedReview !== null && (!root.selectedReview.response)
+                    text: String(replyArea.text.length) + " / 4000"
+                    color: replyArea.text.length > 4000 ? root.urgent : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
                   }
                 }
               }
