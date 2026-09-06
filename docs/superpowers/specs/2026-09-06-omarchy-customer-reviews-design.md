@@ -1,10 +1,10 @@
-# Omarchy Reviews Plugin Design
+# Omarchy Customer Reviews Plugin Design
 
 Date: 2026-09-06
 Status: approved in conversation; waiting for spec review
-Plugin id: `ryuhzk.reviews`
-Display name: Reviews
-Repository: `~/Work/omarchy-reviews`
+Plugin id: `ryuhzk.customer-reviews`
+Display name: Customer Reviews
+Repository: `~/Work/omarchy-customer-reviews`
 
 ## Goal
 
@@ -27,8 +27,9 @@ switcher are out of scope for the first implementation.
    can show unreplied-only.
 5. The user can type a reply in the panel and submit it through the official
    Customer Review Responses API.
-6. A background service polls every 15 minutes and notifies on new reviews
-   for watched apps, including five-star reviews.
+6. A background service polls every 3 hours and notifies on new reviews
+   for watched apps, including five-star reviews. Opening the panel loads
+   the active app's reviews once; that click load does not notify.
 7. Secrets never appear in QML process output, `shell.json`, or notifications.
 
 ## Non-goals (v1)
@@ -54,15 +55,18 @@ Follow the existing `~/Work` Omarchy plugins:
 ```text
 BarWidget / Panel.qml
         │
-        │  bar.shell.serviceFor("ryuhzk.reviews")
+        │  bar.shell.serviceFor("ryuhzk.customer-reviews")
         ▼
-   Service.qml  ── Timer 15m ──►  bun backend/reviews.ts poll
-        │                              │
-        │                              ▼
-        │                    ~/.config/omarchy-reviews/
-        │                    ~/.cache/omarchy-reviews/
-        ▼
-   Panel actions ──► bun backend/reviews.ts <command>
+   Service.qml
+        ├── Timer 3h ──► bun backend/customer-reviews.ts poll
+        │                 (badge + notifications only)
+        └── click-open ──► bun backend/customer-reviews.ts reviews list
+                           (inbox load once, no notify)
+
+   Panel actions ──► bun backend/customer-reviews.ts <command>
+
+   Config/cache: ~/.config/omarchy-customer-reviews/
+                 ~/.cache/omarchy-customer-reviews/
 ```
 
 QML never talks to Apple. Every network call and every read of the `.p8` file
@@ -71,7 +75,7 @@ happens in the Bun CLI.
 ## Repository layout
 
 ```text
-omarchy-reviews/
+omarchy-customer-reviews/
   manifest.json
   package.json
   check
@@ -81,9 +85,9 @@ omarchy-reviews/
   Panel.qml
   Service.qml
   backend/
-    reviews.ts          # CLI entry
+    customer-reviews.ts # CLI entry
     apple.ts            # App Store Connect JWT + HTTP
-    config.ts           # load/save ~/.config/omarchy-reviews
+    config.ts           # load/save ~/.config/omarchy-customer-reviews
     model.ts            # shared types and JSON envelopes
     store.ts            # cache + seen-review ids
   tests/
@@ -91,15 +95,16 @@ omarchy-reviews/
     config.test.ts
     store.test.ts
   docs/superpowers/specs/
-    2026-09-06-omarchy-reviews-design.md
+    2026-09-06-omarchy-customer-reviews-design.md
 ```
 
 `package.json` matches the Bun plugins:
 
+- `"name": "omarchy-customer-reviews"`
 - `"type": "module"`
 - `"packageManager": "bun@1.4.2"`
 - `bun test` for tests
-- `bun build backend/reviews.ts --target=bun` as the compile check
+- `bun build backend/customer-reviews.ts --target=bun` as the compile check
 
 User-visible QML, `manifest.json`, and README stay English-only, same lint
 rule as `omarchy-lyrics`.
@@ -109,8 +114,8 @@ rule as `omarchy-lyrics`.
 ```json
 {
   "schemaVersion": 1,
-  "id": "ryuhzk.reviews",
-  "name": "Reviews",
+  "id": "ryuhzk.customer-reviews",
+  "name": "Customer Reviews",
   "kinds": ["service", "bar-widget"],
   "keepLoaded": true,
   "entryPoints": {
@@ -127,7 +132,7 @@ Bar widget settings:
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `panelWidth` | integer | `720` | Popup width, 420–1100 |
-| `pollIntervalSec` | integer | `900` | Service poll interval, 300–3600 |
+| `pollIntervalSec` | integer | `10800` | Background poll interval, 3600–43200 (1–12 hours, default 3) |
 | `unrepliedOnly` | boolean | `true` | Inbox default filter |
 
 Watch-list and credentials are not widget settings. They live in the private
@@ -135,7 +140,7 @@ config file so `shell.json` never holds secrets or a large app list.
 
 ## Private config and cache
 
-Config file: `~/.config/omarchy-reviews/config.env`  
+Config file: `~/.config/omarchy-customer-reviews/config.env`  
 Mode: `0600` on the file, `0700` on the directory  
 Atomic write: temp file in the same directory, then rename
 
@@ -154,10 +159,10 @@ ACTIVE_APP_ID=
 `ACTIVE_APP_ID` is the last inbox selection.
 
 The `.p8` stays where the user downloaded it, or is copied to
-`~/.config/omarchy-reviews/AuthKey_<KEY_ID>.p8` with mode `0600` if the
-user picked a file through the panel. The config stores only the path.
+`~/.config/omarchy-customer-reviews/AuthKey_<KEY_ID>.p8` with mode `0600` if
+the user picked a file through the panel. The config stores only the path.
 
-Cache directory: `~/.cache/omarchy-reviews/`
+Cache directory: `~/.cache/omarchy-customer-reviews/`
 
 | File | Purpose |
 | --- | --- |
@@ -242,8 +247,16 @@ desktop side effects.
 
 ### Service.qml
 
-Always loaded. Owns the poll timer (`pollIntervalSec` from the bar widget,
-pushed the same way lyrics pushes overlay settings).
+Always loaded. Owns the background poll timer (`pollIntervalSec` from the
+bar widget, default 10800 / 3 hours, pushed the same way lyrics pushes
+overlay settings). The timer is the only automatic Apple traffic. It
+updates the bar badge and may send notifications.
+
+Opening the panel is a separate, user-triggered load: one `reviews list`
+for the active app. That path never sends notifications. After a
+successful click load, fetched review ids are added to `seen.json` so
+the next background poll does not notify for reviews the user already
+opened.
 
 Exposed to the widget:
 
@@ -257,7 +270,7 @@ Exposed to the widget:
 On `poll` JSON with `newReviews.length > 0`, send one desktop notification
 per new review:
 
-- app: `Reviews`
+- app: `Customer Reviews`
 - title: `{appName} · {rating}★`
 - body: review title, or the first 120 characters of the review body if the
   title is empty
@@ -271,7 +284,13 @@ notify for historical reviews. Only later polls notify.
 
 ### BarWidget.qml
 
-Left click toggles `Panel.qml`.
+Left click toggles `Panel.qml`. Opening the panel (closed → open) loads
+the inbox once for `ACTIVE_APP_ID`, or the first watched app if that is
+empty. Closing the panel does not fetch. Clicking again while the panel
+is already open only closes it.
+
+The bar uses the short label `Reviews` so the widget stays narrow. The
+plugin display name remains `Customer Reviews`.
 
 Bar label:
 
@@ -290,7 +309,10 @@ Three states, one panel:
    link returns to Setup.
 3. **Inbox** — app chips for watched apps, unreplied filter toggle, review
    list, selected review (stars, date, territory, body, existing reply),
-   reply textarea, Submit, Delete reply when a response exists.
+   reply textarea, Submit, Delete reply when a response exists. The first
+   paint after open is the click load. Switching an app chip loads that
+   app once. A Retry control repeats the same list fetch. The inbox does
+   not auto-refresh on a short timer.
 
 Escape closes the panel. Tab / Shift+Tab keep the usual neighboring-panel
 behavior.
@@ -311,7 +333,8 @@ All user-visible strings are English.
 | Empty watched list | Apps state, badge 0 |
 
 Timeouts: 20 seconds per HTTP request. No automatic retry loop in the CLI.
-The panel Retry button and the next timer tick are the only retries.
+Retries are the panel Retry button, the next click-open load, switching
+app chips, and the next 3-hour timer tick.
 
 ## Security
 
@@ -328,7 +351,7 @@ The panel Retry button and the next timer tick are the only retries.
 `./check` must:
 
 1. `bun test`
-2. `bun build backend/reviews.ts --target=bun --outdir=<tmp>`
+2. `bun build backend/customer-reviews.ts --target=bun --outdir=<tmp>`
 3. `omarchy plugin validate "$ROOT"`
 4. `jq` asserts on `manifest.json` id, kinds, and entry points
 5. Fail if CJK characters appear in QML, `manifest.json`, or README
@@ -350,12 +373,13 @@ Automated tests (no live Apple calls):
 Local development, same as lyrics:
 
 ```bash
-ln -s "$PWD" ~/.config/omarchy/plugins/ryuhzk.reviews
+ln -s "$PWD" ~/.config/omarchy/plugins/ryuhzk.customer-reviews
 omarchy-shell shell rescanPlugins
-omarchy plugin enable ryuhzk.reviews --after omarchy.clock
+omarchy plugin enable ryuhzk.customer-reviews --after omarchy.clock
 ```
 
-README also documents `omarchy plugin add file://$HOME/Work/omarchy-reviews --enable --yes`.
+README also documents
+`omarchy plugin add file://$HOME/Work/omarchy-customer-reviews --enable --yes`.
 
 ## Implementation order
 
