@@ -44,7 +44,7 @@ mode `0600`. The PEM never appears in panel output.
 ## Install
 
 ```sh
-omarchy plugin add file://$HOME/Work/omarchy-reviews --enable
+omarchy plugin add https://github.com/ryuhzk/omarchy-reviews.git --enable
 ```
 
 ## Usage

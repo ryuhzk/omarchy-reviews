@@ -375,7 +375,7 @@ https://plugins.omarchy.org/develop.html — no symlinks inside the plugin
 folder:
 
 ```sh
-omarchy plugin add file://$HOME/Work/omarchy-reviews --enable
+omarchy plugin add https://github.com/ryuhzk/omarchy-reviews.git --enable
 omarchy plugin remove ryuhzk.customer-reviews
 ```
 
