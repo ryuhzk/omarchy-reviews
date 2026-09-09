@@ -1,5 +1,6 @@
 import { createPrivateKey, sign } from "node:crypto";
 import type { AppInfo, ErrorCode, Review, ReviewList, ReviewResponse } from "./model";
+import { HTTP_MAX_BODY_BYTES, HTTP_MAX_ERROR_BYTES, readLimitedJson } from "./http-limit";
 import {
   HTTP_TIMEOUT_MS,
   JWT_LIFETIME_SEC,
@@ -182,9 +183,7 @@ export function createPlayClient(options: {
         status: response.status,
       });
     }
-    const text = await response.text();
-    if (text.trim() === "") return {};
-    return JSON.parse(text) as unknown;
+    return readLimitedJson(response, HTTP_MAX_BODY_BYTES);
   }
 
   async function authorized(url: string, init: RequestInit = {}): Promise<unknown> {
@@ -269,9 +268,10 @@ function numberValue(value: unknown): number {
 
 async function playErrorMessage(response: Response): Promise<string> {
   try {
-    const payload = await response.json() as { error?: { message?: string } };
+    const payload = await readLimitedJson(response, HTTP_MAX_ERROR_BYTES) as { error?: { message?: string } };
     return payload.error?.message || `Google Play returned ${response.status}`;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("exceeded")) throw error;
     return `Google Play returned ${response.status}`;
   }
 }

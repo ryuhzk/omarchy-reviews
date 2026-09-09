@@ -1,5 +1,6 @@
 import { createPrivateKey, sign } from "node:crypto";
 import type { AppInfo, ErrorCode, Review, ReviewList, ReviewResponse } from "./model";
+import { HTTP_MAX_BODY_BYTES, HTTP_MAX_ERROR_BYTES, readLimitedJson } from "./http-limit";
 import { ASC_AUDIENCE, HTTP_TIMEOUT_MS, JWT_LIFETIME_SEC, REPLY_MAX_CHARS, REPLY_MIN_CHARS, REVIEW_PAGE_LIMIT, fail } from "./model";
 
 const ASC_BASE = "https://api.appstoreconnect.apple.com";
@@ -44,6 +45,23 @@ export function classifyHttpStatus(status: number): ErrorCode {
   if (status === 401) return "auth";
   if (status === 403) return "forbidden";
   return "apple";
+}
+
+export function isAllowedAppleNextUrl(raw: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:") return false;
+  if (parsed.hostname !== "api.appstoreconnect.apple.com") return false;
+  if (parsed.port !== "" && parsed.port !== "443") return false;
+  if (parsed.username !== "" || parsed.password !== "") return false;
+  if (parsed.hash !== "") return false;
+  const path = parsed.pathname;
+  if (path.includes("..") || path.includes("//") || path.includes("\\")) return false;
+  return /^\/v1\/apps\/[^/]+\/customerReviews\/?$/.test(path);
 }
 
 export function validateReplyBody(body: string): { ok: true; body: string } | { ok: false; message: string } {
@@ -186,9 +204,7 @@ export function createAppleClient(options: {
       throw Object.assign(new Error(message), { code: classifyHttpStatus(response.status), status: response.status });
     }
     if (response.status === 204) return {};
-    const text = await response.text();
-    if (text.trim() === "") return {};
-    return JSON.parse(text) as unknown;
+    return readLimitedJson(response, HTTP_MAX_BODY_BYTES);
   }
 
   return {
@@ -197,7 +213,12 @@ export function createAppleClient(options: {
       return mapApps(payload);
     },
     async listReviews(appId, nextUrl) {
-      const url = nextUrl && nextUrl.startsWith(ASC_BASE)
+      if (nextUrl) {
+        if (!isAllowedAppleNextUrl(nextUrl)) {
+          throw Object.assign(new Error("Rejected pagination URL"), { code: "apple" satisfies ErrorCode });
+        }
+      }
+      const url = nextUrl
         ? nextUrl
         : `${ASC_BASE}/v1/apps/${encodeURIComponent(appId)}/customerReviews?include=response&sort=-createdDate&limit=${REVIEW_PAGE_LIMIT}`;
       return mapReviews(await request(url));
@@ -255,10 +276,11 @@ function numberValue(value: unknown): number {
 
 async function errorMessage(response: Response): Promise<string> {
   try {
-    const payload = await response.json() as { errors?: Array<{ detail?: string; title?: string }> };
+    const payload = await readLimitedJson(response, HTTP_MAX_ERROR_BYTES) as { errors?: Array<{ detail?: string; title?: string }> };
     const first = payload.errors?.[0];
     return first?.detail || first?.title || `App Store Connect returned ${response.status}`;
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("exceeded")) throw error;
     return `App Store Connect returned ${response.status}`;
   }
 }

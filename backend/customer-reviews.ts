@@ -8,6 +8,7 @@ import { groupApps } from "./app-groups";
 import { isAppleConfigured, isConfigured, isPlayConfigured, loadConfig, saveConfig, showConfig } from "./config";
 import { clearCachedReply, findCachedReview, listCachedInbox, patchCachedReply, rememberReviews } from "./inbox-db";
 import type { AppInfo, Envelope, PluginConfig } from "./model";
+import { serializeCliJson } from "./http-limit";
 import { fail, ok, parseAppRef } from "./model";
 import { defaultCacheDir, defaultConfigDir } from "./paths";
 import { createPlayClient, parsePlayServiceAccount, playError, validatePlayReplyBody } from "./play";
@@ -293,7 +294,11 @@ function commandError(error: unknown): Envelope<unknown> {
 }
 
 function printEnvelope(envelope: Envelope<unknown>, compact: boolean): void {
-  process.stdout.write(`${JSON.stringify(envelope, null, compact ? 0 : 2)}\n`);
+  try {
+    process.stdout.write(serializeCliJson(envelope, compact));
+  } catch {
+    process.stdout.write(serializeCliJson(fail("usage", "Backend output exceeded the size limit"), true));
+  }
 }
 
 if (import.meta.main) {
